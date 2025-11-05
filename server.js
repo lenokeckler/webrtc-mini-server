@@ -24,8 +24,8 @@ server.on('upgrade', (request, socket, head) => {
 // 4. Configurar toda la lógica de señalización en la instancia de WSS
 setupSignaling(wss);
 
-// 5. Iniciar el servidor
-server.listen(PORT, () => {
+// 5. Iniciar el servidor  ✅ IMPORTANTE: host '0.0.0.0' para Azure Linux
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Environment: ${NODE_ENV}`);
   console.log(`Server running on port ${PORT}`);
 });
