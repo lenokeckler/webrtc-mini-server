@@ -1,66 +1,139 @@
+// signaling.js
 const { v4: uuidv4 } = require('uuid');
 const WebSocket = require('ws');
 
-const clients = new Map(); // Mapa para almacenar clientes conectados con sus IDs
+// Mapa para almacenar clientes conectados con sus IDs de conexión internos
+// connectionId -> ws
+const clients = new Map();
+
+// Mapa para usuarios de la app (Firebase UID, correo, etc.)
+// appUserId -> ws
+const appUsers = new Map();
 
 /**
- * Configura toda la lógica de señalización en una instancia del servidor WebSocket.
+ * Configura toda la lógica de señalización / chat en una instancia del servidor WebSocket.
  * @param {WebSocket.Server} wss - La instancia del servidor WebSocket.
  */
 function setupSignaling(wss) {
     wss.on('connection', ws => {
-        const userId = uuidv4();
-        clients.set(userId, ws);
-        console.log(`Nuevo cliente conectado: ${userId}`);
+        // ID interno de la conexión (no es el UID de Firebase)
+        const connectionId = uuidv4();
+        clients.set(connectionId, ws);
+        ws.connectionId = connectionId;
+        ws.appUserId = null;
 
-        // Lógica de Heartbeat (Latido) para detectar conexiones inactivas
+        console.log(`Nuevo cliente conectado: ${connectionId}`);
+
+        // Heartbeat para detectar conexiones inactivas
         ws.isAlive = true;
         ws.on('pong', () => { ws.isAlive = true; });
 
-        // Asignar el ID al cliente recién conectado
-        ws.send(JSON.stringify({ type: 'assign-id', userId: userId }));
+        // 1️⃣ Mandar al cliente su ID de conexión (opcional, la app puede ignorarlo)
+        ws.send(JSON.stringify({ type: 'assign-id', userId: connectionId }));
 
-        // Notificar a todos los demás clientes que un nuevo usuario se ha unido
-        clients.forEach((client, id) => {
-            if (id !== userId && client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ type: 'user-joined', userId }));
-            }
-        });
-
-        // Enviar la lista de usuarios existentes al nuevo cliente
-        const otherUserIds = Array.from(clients.keys()).filter(id => id !== userId);
-        if (otherUserIds.length > 0) {
-            ws.send(JSON.stringify({ type: 'existing-users', userIds: otherUserIds }));
-        }
-
+        // 2️⃣ Manejo de mensajes entrantes
         ws.on('message', message => {
             try {
                 const parsedMessage = JSON.parse(message);
-                const targetClient = clients.get(parsedMessage.userId);
 
-                if (targetClient && targetClient.readyState === WebSocket.OPEN) {
-                    // Añadir el ID del remitente al mensaje antes de reenviarlo
-                    const messageToSend = { ...parsedMessage, fromUserId: userId };
-                    targetClient.send(JSON.stringify(messageToSend));
+                switch (parsedMessage.type) {
+                    // REGISTRO DEL USUARIO DE LA APP (Firebase UID o correo)
+                    case 'register-user': {
+                        const appUserId = parsedMessage.appUserId;
+                        if (!appUserId) {
+                            console.warn(
+                                `Mensaje register-user sin appUserId desde conexión ${connectionId}`
+                            );
+                            return;
+                        }
+
+                        // Guardamos el UID en el socket
+                        ws.appUserId = appUserId;
+
+                        // Si ya había otro socket con ese UID, lo podemos reemplazar
+                        appUsers.set(appUserId, ws);
+
+                        console.log(
+                            `Conexión ${connectionId} registrada como appUserId=${appUserId}`
+                        );
+
+                        // Opcional: confirmación al cliente
+                        ws.send(
+                            JSON.stringify({
+                                type: 'register-confirmed',
+                                appUserId
+                            })
+                        );
+                        break;
+                    }
+
+                    // MENSAJE DE CHAT APP-TO-APP
+                    case 'chat-message': {
+                        const toAppUserId = parsedMessage.toAppUserId;
+                        if (!toAppUserId) {
+                            console.warn(
+                                `chat-message sin toAppUserId desde conexión ${connectionId}`
+                            );
+                            return;
+                        }
+
+                        const targetClient = appUsers.get(toAppUserId);
+
+                        if (targetClient && targetClient.readyState === WebSocket.OPEN) {
+                            const payload = {
+                                type: 'chat-message',
+                                // quién envía (UID de Firebase o correo)
+                                fromAppUserId: ws.appUserId,
+                                // por si querés usar un id de chat (speaker-5-es, etc.)
+                                chatId: parsedMessage.chatId || null,
+                                text: parsedMessage.text || '',
+                                timestamp:
+                                    parsedMessage.timestamp || Date.now(),
+                                // debug opcional
+                                fromConnectionId: connectionId
+                            };
+
+                            targetClient.send(JSON.stringify(payload));
+                        } else {
+                            console.warn(
+                                `No se encontró conexión WebSocket para toAppUserId=${toAppUserId}`
+                            );
+                        }
+                        break;
+                    }
+
+                    // OTROS TIPOS (si más adelante querés reusar para WebRTC u otra cosa)
+                    default: {
+                        console.log(
+                            `Tipo de mensaje no manejado (${parsedMessage.type}) desde ${connectionId}`
+                        );
+                        break;
+                    }
                 }
             } catch (error) {
-                console.error(`Fallo al parsear mensaje o formato inválido de ${userId}:`, message.toString(), error);
+                console.error(
+                    `Fallo al parsear mensaje o formato inválido de ${connectionId}:`,
+                    message.toString(),
+                    error
+                );
             }
         });
 
+        // 3️⃣ Limpiar al desconectar
         ws.on('close', () => {
-            clients.delete(userId);
-            console.log(`Cliente desconectado: ${userId}`);
-            // Notificar a todos los demás clientes que un usuario se ha ido
-            clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({ type: 'user-left', userId }));
-                }
-            });
+            clients.delete(connectionId);
+
+            if (ws.appUserId && appUsers.get(ws.appUserId) === ws) {
+                appUsers.delete(ws.appUserId);
+            }
+
+            console.log(
+                `Cliente desconectado: connectionId=${connectionId}, appUserId=${ws.appUserId}`
+            );
         });
     });
 
-    // Intervalo para el Heartbeat que limpia conexiones inactivas
+    // Heartbeat que limpia conexiones muertas
     const interval = setInterval(() => {
         wss.clients.forEach(ws => {
             if (ws.isAlive === false) {
@@ -69,7 +142,7 @@ function setupSignaling(wss) {
             ws.isAlive = false;
             ws.ping();
         });
-    }, 30000); // Se ejecuta cada 30 segundos
+    }, 30000);
 
     wss.on('close', () => {
         clearInterval(interval);
