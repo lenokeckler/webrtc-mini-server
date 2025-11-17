@@ -1,3 +1,4 @@
+// httpServer.js
 const http = require('http');
 
 /**
@@ -14,17 +15,22 @@ function createHttpServer(wss) {
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            return res.end();
+        }
+
         if (req.url === '/status') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 status: 'running',
                 environment: NODE_ENV,
-                connections: wss.clients.size, // Obtiene el número de clientes del servidor WS
+                connections: wss.clients.size, // número de clientes WS conectados
                 uptime: process.uptime(),
             }));
         } else {
-            res.writeHead(200, { 'Content-Type': 'text/plain' });
-            res.end('Servidor WebSocket en funcionamiento.');
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Servidor WebSocket en funcionamiento para QuickSpeak (chat/tiempo real).');
         }
     });
 }
