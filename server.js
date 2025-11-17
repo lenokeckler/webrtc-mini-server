@@ -1,3 +1,4 @@
+// server.js
 require('dotenv').config();
 
 const WebSocket = require('ws');
@@ -21,7 +22,7 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-// 4. Configurar toda la lógica de señalización en la instancia de WSS
+// 4. Configurar toda la lógica de señalización / chat en la instancia de WSS
 setupSignaling(wss);
 
 // 5. Iniciar el servidor  ✅ IMPORTANTE: host '0.0.0.0' para Azure Linux
