@@ -2,7 +2,7 @@
   "name": "webrtc-mini-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Servidor de señalización WebSocket para WebRTC",
+  "description": "Servidor WebSocket ligero (gateway de tiempo real) para QuickSpeak",
   "main": "server.js",
   "engines": { "node": ">=20" },
   "scripts": {
